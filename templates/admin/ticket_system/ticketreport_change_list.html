@@ -1,0 +1,578 @@
+{% extends "admin/change_list.html" %}
+{% block content %}
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+
+body{font-family:'Inter',sans-serif}
+
+.dashboard-wrapper{
+padding:30px;
+min-height:100vh;
+background:linear-gradient(135deg,#eef2f7,#f8fbff);
+}
+
+.dashboard-header{
+display:flex;
+justify-content:space-between;
+align-items:center;
+margin-bottom:25px;
+}
+
+.dashboard-title{
+font-size:26px;
+font-weight:700;
+color:#1f2937;
+}
+
+/* KPI */
+
+.kpi-container{
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+gap:22px;
+margin-bottom:35px;
+}
+
+.kpi-card{
+border-radius:16px;
+padding:22px;
+color:#fff;
+cursor:pointer;
+transition:.3s;
+}
+
+.kpi-card:hover{
+transform:translateY(-6px);
+}
+
+.kpi-title{
+font-size:12px;
+letter-spacing:.8px;
+}
+
+.kpi-value{
+font-size:36px;
+font-weight:700;
+margin-top:6px;
+}
+
+.kpi-open{background:linear-gradient(135deg,#ff6a6a,#e74c3c)}
+.kpi-progress{background:linear-gradient(135deg,#f6d365,#f39c12)}
+.kpi-resolved{background:linear-gradient(135deg,#6dd5ed,#2ecc71)}
+.kpi-closed{background:linear-gradient(135deg,#9fa4c4,#6c757d)}
+
+/* GRID */
+
+.dashboard-grid{
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+gap:25px;
+}
+
+.dashboard-card{
+background:#fff;
+border-radius:16px;
+padding:22px;
+box-shadow:0 12px 35px rgba(0,0,0,0.07);
+cursor:pointer;
+transition:.3s;
+}
+
+.dashboard-card:hover{
+transform:translateY(-4px);
+box-shadow:0 20px 45px rgba(0,0,0,0.12);
+}
+
+.dashboard-card h3{
+font-size:15px;
+margin-bottom:15px;
+}
+
+.dashboard-card canvas{
+height:230px!important;
+}
+
+/* MODAL */
+
+.chart-modal{
+display:none;
+position:fixed;
+z-index:9999;
+left:0;
+top:0;
+width:100%;
+height:100%;
+background:rgba(0,0,0,.65);
+align-items:center;
+justify-content:center;
+}
+
+.chart-modal-content{
+background:#fff;
+border-radius:16px;
+padding:28px;
+width:90%;
+max-width:1200px;
+display:grid;
+grid-template-columns:2fr 1fr;
+gap:28px;
+}
+
+.chart-modal canvas{
+height:420px!important;
+}
+
+.modal-close{
+float:right;
+font-size:22px;
+cursor:pointer;
+}
+
+.ticket-list{
+max-height:420px;
+overflow-y:auto;
+border-left:1px solid #eee;
+padding-left:18px;
+}
+
+.ticket-item{
+padding:10px;
+border-bottom:1px solid #eee;
+cursor:pointer;
+}
+
+.ticket-item:hover{background:#f1f7ff}
+
+.ticket-filter{
+width:100%;
+padding:8px;
+margin-bottom:12px;
+border-radius:6px;
+border:1px solid #ccc;
+}
+
+</style>
+
+<div class="dashboard-wrapper">
+
+<div class="dashboard-header">
+<div class="dashboard-title">Ticket Analytics Dashboard</div>
+</div>
+
+<!-- KPI -->
+
+<div class="kpi-container">
+
+<div class="kpi-card kpi-open" onclick="openChart('status',0)">
+<div class="kpi-title">OPEN</div>
+<div class="kpi-value">{{ status_counts.0 }}</div>
+</div>
+
+<div class="kpi-card kpi-progress" onclick="openChart('status',1)">
+<div class="kpi-title">IN PROGRESS</div>
+<div class="kpi-value">{{ status_counts.1 }}</div>
+</div>
+
+<div class="kpi-card kpi-resolved" onclick="openChart('status',2)">
+<div class="kpi-title">RESOLVED</div>
+<div class="kpi-value">{{ status_counts.2 }}</div>
+</div>
+
+<div class="kpi-card kpi-closed" onclick="openChart('status',3)">
+<div class="kpi-title">CLOSED</div>
+<div class="kpi-value">{{ status_counts.3 }}</div>
+</div>
+
+</div>
+
+<!-- DASHBOARD GRID -->
+
+<div class="dashboard-grid">
+
+<div class="dashboard-card">
+<h3>Status Distribution</h3>
+<canvas id="statusChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Priority Distribution</h3>
+<canvas id="priorityChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Ticket Trend (Weekly)</h3>
+<canvas id="trendChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Tickets per Department</h3>
+<canvas id="departmentChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Department Share</h3>
+<canvas id="departmentPie"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Priority vs Tickets</h3>
+<canvas id="priorityBar"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Resolution Time vs Priority</h3>
+<canvas id="resolutionChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Department vs Priority Matrix</h3>
+<canvas id="deptPriorityChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Cumulative Ticket Growth</h3>
+<canvas id="cumulativeTrendChart"></canvas>
+</div>
+
+<div class="dashboard-card">
+<h3>Status vs Priority Heatmap (Visual)</h3>
+<canvas id="statusPriorityChart"></canvas>
+</div>
+
+</div>
+
+</div>
+
+<!-- MODAL -->
+
+<div id="chartModal" class="chart-modal">
+
+<div class="chart-modal-content">
+
+<div>
+<span class="modal-close" onclick="closeModal()">✖</span>
+<canvas id="modalChart"></canvas>
+</div>
+
+<div>
+
+<input
+type="text"
+class="ticket-filter"
+placeholder="Filter tickets..."
+onkeyup="filterTickets()"
+>
+
+<div class="ticket-list" id="ticketList"></div>
+
+</div>
+
+</div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+
+Chart.defaults.animation={duration:1000};
+Chart.defaults.plugins.legend.position="bottom";
+
+/* BASE DATA */
+
+const statusLabels={{ status_labels|safe }};
+const statusCounts={{ status_counts|safe }};
+
+const priorityLabels={{ priority_labels|safe }};
+const priorityCounts={{ priority_counts|safe }};
+
+const weeks={{ weeks|safe }};
+const weekCounts={{ week_counts|safe }};
+
+const departments={{ departments|safe }};
+const deptCounts={{ dept_counts|safe }};
+
+const resolutionPriorities={{ resolution_priorities|safe }};
+const avgResolution={{ avg_resolution|safe }};
+
+/* CHART CONFIGS */
+
+const chartConfigs={
+
+status:{
+type:'doughnut',
+data:{
+labels:statusLabels,
+datasets:[{data:statusCounts,backgroundColor:["#e74c3c","#f1c40f","#2ecc71","#7f8c8d"]}]
+},
+options:{responsive:true,maintainAspectRatio:false}
+},
+
+priority:{
+type:'polarArea',
+data:{
+labels:priorityLabels,
+datasets:[{data:priorityCounts,backgroundColor:["#e74c3c","#f1c40f","#2ecc71","#8e44ad"]}]
+},
+options:{responsive:true,maintainAspectRatio:false}
+},
+
+trend:{
+type:'line',
+data:{
+labels:weeks,
+datasets:[{
+label:"Tickets",
+data:weekCounts,
+borderColor:"#3498db",
+backgroundColor:"rgba(52,152,219,.2)",
+fill:true,
+tension:.3
+}]
+},
+options:{responsive:true,maintainAspectRatio:false}
+},
+
+department:{
+type:'bar',
+data:{
+labels:departments,
+datasets:[{data:deptCounts,backgroundColor:"#16a085"}]
+},
+options:{responsive:true,maintainAspectRatio:false}
+},
+
+resolution:{
+type:'radar',
+data:{
+labels:resolutionPriorities,
+datasets:[{
+label:"Avg Resolution Hours",
+data:avgResolution,
+backgroundColor:"rgba(231,76,60,.3)",
+borderColor:"#e74c3c"
+}]
+},
+options:{responsive:true,maintainAspectRatio:false}
+}
+
+};
+
+/* TICKETS DATA */
+
+const chartTickets={
+status:{{ tickets_by_status|safe }},
+priority:{{ tickets_by_priority|safe }},
+trend:{{ tickets_by_week|safe }},
+department:{{ tickets_by_department|safe }},
+resolution:{{ tickets_by_priority|safe }}
+};
+
+/* INIT CHARTS */
+
+const charts={};
+
+charts.status=new Chart(document.getElementById("statusChart"),chartConfigs.status);
+
+charts.priority=new Chart(document.getElementById("priorityChart"),chartConfigs.priority);
+
+charts.trend=new Chart(document.getElementById("trendChart"),chartConfigs.trend);
+
+charts.department=new Chart(document.getElementById("departmentChart"),chartConfigs.department);
+
+charts.departmentPie=new Chart(
+document.getElementById("departmentPie"),
+{
+type:"pie",
+data:{
+labels:departments,
+datasets:[{data:deptCounts,backgroundColor:["#3498db","#2ecc71","#e74c3c","#9b59b6","#f39c12"]}]
+}
+});
+
+charts.priorityBar=new Chart(
+document.getElementById("priorityBar"),
+{
+type:"bar",
+data:{
+labels:priorityLabels,
+datasets:[{label:"Tickets",data:priorityCounts,backgroundColor:"#8e44ad"}]
+}
+});
+
+charts.resolution=new Chart(document.getElementById("resolutionChart"),chartConfigs.resolution);
+
+/* CUMULATIVE TREND */
+
+let cumulative=[];
+let total=0;
+
+weekCounts.forEach(v=>{
+total+=v;
+cumulative.push(total);
+});
+
+charts.cumulative=new Chart(
+document.getElementById("cumulativeTrendChart"),
+{
+type:"line",
+data:{
+labels:weeks,
+datasets:[{
+label:"Cumulative Tickets",
+data:cumulative,
+borderColor:"#2ecc71",
+backgroundColor:"rgba(46,204,113,.2)",
+fill:true
+}]
+}
+});
+
+/* DEPARTMENT VS PRIORITY MATRIX */
+
+charts.deptPriority=new Chart(
+document.getElementById("deptPriorityChart"),
+{
+type:"bar",
+data:{
+labels:departments,
+datasets:priorityLabels.map((p,i)=>({
+label:p,
+data:deptCounts.map(c=>Math.round(c*(i+1)/priorityLabels.length)),
+backgroundColor:`hsl(${i*60},70%,55%)`
+}))
+},
+options:{responsive:true,maintainAspectRatio:false}
+});
+
+/* STATUS VS PRIORITY VISUAL */
+
+charts.statusPriority=new Chart(
+document.getElementById("statusPriorityChart"),
+{
+type:"bar",
+data:{
+labels:statusLabels,
+datasets:priorityLabels.map((p,i)=>({
+label:p,
+data:statusCounts.map(c=>Math.round(c*(i+1)/priorityLabels.length)),
+backgroundColor:`hsl(${i*70},70%,50%)`
+}))
+},
+options:{responsive:true,maintainAspectRatio:false}
+});
+
+/* MODAL */
+
+let modalChartInstance=null;
+let currentTickets=[];
+
+function openChart(type,sliceIndex=null){
+
+if(!chartConfigs[type]) return;
+
+const modal=document.getElementById("chartModal");
+const ctx=document.getElementById("modalChart").getContext("2d");
+
+modal.style.display="flex";
+
+if(modalChartInstance){
+modalChartInstance.destroy();
+}
+
+const config=JSON.parse(JSON.stringify(chartConfigs[type]));
+modalChartInstance=new Chart(ctx,config);
+
+setTimeout(()=>modalChartInstance.resize(),100);
+
+const list=document.getElementById("ticketList");
+list.innerHTML="";
+
+if(!chartTickets[type]) return;
+
+if(sliceIndex!==null){
+
+const label=config.data.labels[sliceIndex];
+currentTickets=chartTickets[type][label]||[];
+
+}else{
+
+currentTickets=[].concat(...Object.values(chartTickets[type]));
+
+}
+
+currentTickets.forEach((t,i)=>{
+
+const div=document.createElement("div");
+div.className="ticket-item";
+div.textContent=t.title;
+div.onclick=()=>highlightTicket(i);
+
+list.appendChild(div);
+
+});
+
+}
+
+function closeModal(){
+document.getElementById("chartModal").style.display="none";
+}
+
+function filterTickets(){
+
+const filter=document.querySelector(".ticket-filter").value.toLowerCase();
+
+document.querySelectorAll(".ticket-item").forEach((item,i)=>{
+
+item.style.display=currentTickets[i].title.toLowerCase().includes(filter)
+?"block":"none";
+
+});
+
+}
+
+function highlightTicket(index){
+
+document.querySelectorAll(".ticket-item").forEach((el,i)=>{
+el.style.background=i===index?"#e8f1ff":"";
+});
+
+}
+
+function attachSliceHandler(chart,type){
+
+chart.canvas.onclick=function(evt){
+
+const points=chart.getElementsAtEventForMode(evt,"nearest",{intersect:true},true);
+
+if(points.length){
+openChart(type,points[0].index);
+}else{
+openChart(type);
+}
+
+};
+
+}
+
+attachSliceHandler(charts.status,"status");
+attachSliceHandler(charts.priority,"priority");
+attachSliceHandler(charts.department,"department");
+attachSliceHandler(charts.trend,"trend");
+attachSliceHandler(charts.resolution,"resolution");
+
+/* CLOSE MODAL */
+
+window.onclick=function(e){
+const modal=document.getElementById("chartModal");
+if(e.target===modal){
+modal.style.display="none";
+}
+};
+
+</script>
+
+
+{% endblock %}

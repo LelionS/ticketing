@@ -1,0 +1,42 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<h1>Ticket Dashboard</h1>
+<ul>
+    <li><strong>Open:</strong> {{ status_counts.Open }}</li>
+    <li><strong>In Progress:</strong> {{ status_counts.In Progress }}</li>
+    <li><strong>Resolved:</strong> {{ status_counts.Resolved }}</li>
+    <li><strong>Closed:</strong> {{ status_counts.Closed }}</li>
+</ul>
+
+<h2>Status Chart</h2>
+<canvas id="ticketChart" width="400" height="200"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const ctx = document.getElementById('ticketChart').getContext('2d');
+const chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+        labels: ['Open', 'In Progress', 'Resolved', 'Closed'],
+        datasets: [{
+            label: 'Tickets',
+            data: [
+                {{ status_counts.Open }},
+                {{ status_counts.In Progress }},
+                {{ status_counts.Resolved }},
+                {{ status_counts.Closed }}
+            ],
+            backgroundColor: ['#17a2b8','#007bff','#28a745','#6c757d']
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { display: false },
+            title: { display: true, text: 'Tickets by Status' }
+        }
+    }
+});
+</script>
+{% endblock %}
