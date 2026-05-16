@@ -1,6 +1,4 @@
 from django.core.mail import EmailMessage, get_connection
-from django.template.loader import render_to_string
-
 from ticket_system.models import EmailConfig
 
 
@@ -8,11 +6,28 @@ def get_active_email_config():
     return EmailConfig.objects.filter(is_active=True).first()
 
 
-def build_purchase_order_email(po, recipient_name="User"):
-
+def build_purchase_order_email(po, recipient_name="User", event_type="updated"):
     latest_note = po.notes.order_by("-created_at").first()
 
-    subject = f"Purchase Order Update - {po.po_number} ({po.status.upper()})"
+    is_created = event_type == "created"
+
+    subject = (
+        f"New Purchase Order Created - {po.po_number}"
+        if is_created
+        else f"Purchase Order Update - {po.po_number} ({po.status.upper()})"
+    )
+
+    intro_message = (
+        f"A new Purchase Order has been created under ticket <strong>{po.ticket.code}</strong>."
+        if is_created
+        else f"Update on Purchase Order linked to ticket <strong>{po.ticket.code}</strong>."
+    )
+
+    action_message = (
+        "Please review the newly created Purchase Order."
+        if is_created
+        else "Please review the latest updates."
+    )
 
     body_html = f"""
     <!DOCTYPE html>
@@ -21,14 +36,13 @@ def build_purchase_order_email(po, recipient_name="User"):
 
         <div style="max-width:700px;margin:auto;padding:20px;border:1px solid #ddd;">
 
-            <h2>Purchase Order Update</h2>
+            <h2>{"New Purchase Order Created" if is_created else "Purchase Order Update"}</h2>
 
             <p>Hello {recipient_name},</p>
 
-            <p>
-                Update on Purchase Order linked to ticket:
-                <strong>{po.ticket.code}</strong>
-            </p>
+            <p>{intro_message}</p>
+
+            <p>{action_message}</p>
 
             <table style="width:100%;border-collapse:collapse;">
                 <tr>
@@ -56,7 +70,7 @@ def build_purchase_order_email(po, recipient_name="User"):
                     <td style="border:1px solid #ddd;padding:8px;">{po.description or ''}</td>
                 </tr>
             </table>
-"""
+    """
 
     if latest_note:
         body_html += f"""
@@ -86,8 +100,7 @@ def build_purchase_order_email(po, recipient_name="User"):
     return subject, body_html
 
 
-def send_purchase_order_email(po, recipients):
-
+def send_purchase_order_email(po, recipients, event_type="updated"):
     email_config = get_active_email_config()
 
     if not email_config:
@@ -103,11 +116,18 @@ def send_purchase_order_email(po, recipients):
         use_ssl=email_config.use_ssl,
     )
 
-    for email_address, name in recipients:
+    sent = set()
+
+    def send_email(email_address, name):
+        if not email_address or email_address in sent:
+            return
+
+        sent.add(email_address)
 
         subject, body_html = build_purchase_order_email(
             po,
-            recipient_name=name
+            recipient_name=name,
+            event_type=event_type
         )
 
         email = EmailMessage(
@@ -117,8 +137,19 @@ def send_purchase_order_email(po, recipients):
             to=[email_address],
             connection=connection,
         )
-
         email.content_subtype = "html"
         email.send(fail_silently=False)
+
+    # 1. external recipients
+    for email_address, name in recipients:
+        send_email(email_address, name)
+
+    # 2. PO creator
+    if getattr(po, "created_by", None):
+        creator = po.created_by
+        send_email(
+            getattr(creator, "email", None),
+            getattr(creator, "get_full_name", lambda: creator.username)() or creator.username
+        )
 
     return True
