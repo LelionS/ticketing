@@ -224,6 +224,9 @@ from .utils import build_ticket_email  # your utility function for email content
 from .email_to_ticket import get_active_email_config
 from .email_to_ticket import build_recipients
 
+from purchase_orders.utils import send_purchase_order_email
+
+
 User = get_user_model()
 
 
@@ -310,6 +313,43 @@ class TicketAdmin(PurchaseOrderNotesMixin, admin.ModelAdmin):
     )
 
     inlines = [TicketCommentInline, TicketAttachmentInline, PurchaseOrderInline]
+
+    
+    def save_formset(self, request, form, formset, change):
+    """
+    Handles inline saving (PurchaseOrder + others).
+    This is where inline PurchaseOrders are created.
+    """
+
+        instances = formset.save(commit=False)
+    
+        for obj in instances:
+            obj.save()
+    
+            # -----------------------------
+            # PURCHASE ORDER INLINE TRIGGER
+            # -----------------------------
+            if isinstance(obj, PurchaseOrder):
+    
+                try:
+                    recipients = build_recipients(obj.ticket)
+    
+                    if recipients:
+                        send_purchase_order_email(
+                            obj,
+                            recipients,
+                            event_type="created"
+                        )
+    
+                except Exception as e:
+                    self.message_user(
+                        request,
+                        f"PO email failed: {str(e)}",
+                        level=messages.ERROR
+                    )
+    
+        formset.save_m2m()
+
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
