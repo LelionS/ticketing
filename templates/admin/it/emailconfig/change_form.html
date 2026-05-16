@@ -2,9 +2,11 @@
 
 {% block object-tools %}
     {{ block.super }}
+    {% if original %}
     <li>
         <a href="{% url 'admin:it_emailconfig_test_smtp' original.id %}" class="button">
             Test SMTP
         </a>
     </li>
+    {% endif %}
 {% endblock %}

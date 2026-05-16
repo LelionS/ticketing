@@ -1,0 +1,17 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<h1>SMTP Test Result</h1>
+
+<p>
+    {% if result.success %}
+        ✅ {{ result.message }}
+    {% else %}
+        ❌ {{ result.message }}
+    {% endif %}
+</p>
+
+<p>
+    <a href="../../{{ config.pk }}/change/" class="button">Back to Email Config</a>
+</p>
+{% endblock %}

@@ -28,9 +28,10 @@ SECRET_KEY = 'django-insecure-su4xcpxty449uh!^h^@2-*b)vmiae38_xli-r=@300zdd=s&wi
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*', '10.120.45.231']
+ALLOWED_HOSTS = ['*', '10.120.39.101']
 
-
+# FORCE_SCRIPT_NAME = "/ticket"
+# STATIC_URL = "/ticket/static/"
 # Application definition
 
 INSTALLED_APPS = [
@@ -42,6 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'ticket_system',
+    'purchase_orders',
 ]
 
 MIDDLEWARE = [
@@ -92,14 +94,21 @@ JAZZMIN_SETTINGS = {
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': 'ticket_db',
+#         'USER': 'master',
+#         'PASSWORD': 'Password123!',
+#         'HOST': '10.120.15.31',
+#         'PORT': '3307'
+#     }
+# }
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'ticket_db',
-        'USER': 'root',
-        'PASSWORD': 'Root@8998Secure!',
-        'HOST': 'localhost',
-        'PORT': '3306'
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 }
 
@@ -121,13 +130,13 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
+SITE_URL = "http://10.120.39.101"
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Africa/Nairobi'
 
 USE_I18N = True
 
@@ -136,11 +145,8 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
-
-STATIC_URL = '/static/'
-
-# Folder for collectstatic to gather all static files
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
-# Optional dev static folder
-STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
+# settings.py
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_URL = "/ticket/media/"
+STATIC_URL = '/ticket/static/'
+STATIC_ROOT = '/home/olijke/Ticket_System/static/'  # directory for collectstatic

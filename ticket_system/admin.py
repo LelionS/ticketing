@@ -3,6 +3,9 @@ from django.contrib import admin
 from django.db.models import Q
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from .utils import get_outlook_importance
+from django.core.mail import EmailMultiAlternatives, get_connection
+from django.contrib import messages
 from .models import Ticket, TicketComment, MyTickets, DepartmentTickets
 from django import forms
 from django.contrib import admin
@@ -16,7 +19,103 @@ User = get_user_model()
 from django import forms
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import TicketComment
+from .models import TicketComment, TicketAttachment
+
+from django.utils.html import format_html
+from django.urls import reverse
+
+
+from django import forms
+from django.contrib import admin
+from django.utils.html import format_html
+from django.urls import reverse
+from .models import TicketAttachment
+
+from django import forms
+from django.contrib import admin
+from django.utils.html import format_html
+from django.urls import reverse
+
+from purchase_orders.models import PurchaseOrder
+from django.contrib import admin
+
+
+
+from django.contrib import admin
+from django.utils.html import format_html
+
+from .models import Ticket
+
+from django.utils.html import format_html
+from django.utils.safestring import mark_safe
+from purchase_orders.models import PurchaseOrderNote
+
+
+class PurchaseOrderNotesMixin:
+
+    def purchase_order_notes(self, obj):
+
+        notes = PurchaseOrderNote.objects.filter(
+            purchase_order__ticket=obj
+        ).select_related("purchase_order").order_by("-created_at")
+
+        if not notes.exists():
+            return "No Purchase Order notes."
+
+        html = ""
+
+        for note in notes:
+            html += f"""
+            <div style="
+                margin-bottom:10px;
+                padding:12px;
+                border:1px solid #ddd;
+                border-radius:6px;
+                background:#f8f8f8;
+            ">
+                <strong>{note.purchase_order.po_number}</strong>
+                <br><br>
+
+                {note.note}
+
+                <br><br>
+
+                <small>
+                    {note.created_at.strftime("%Y-%m-%d %H:%M")}
+                </small>
+            </div>
+            """
+
+        return mark_safe(html)
+
+    purchase_order_notes.short_description = "Purchase Order Notes"
+
+from purchase_orders.models import (
+    PurchaseOrder,
+    PurchaseOrderNote
+)
+
+
+class PurchaseOrderInline(admin.StackedInline):
+    model = PurchaseOrder
+    extra = 1
+
+    fields = (
+        "po_number",
+        "item_name",
+        "description",
+        "quantity",
+        "status",
+    )
+
+    readonly_fields = ("po_number",)
+
+    show_change_link = True
+
+
+class TicketAttachmentInline(admin.TabularInline):
+    model = TicketAttachment
+    extra = 1
 
 class TicketCommentInlineForm(forms.ModelForm):
     class Meta:
@@ -122,12 +221,14 @@ from django.shortcuts import redirect
 from .models import Ticket, TicketComment, EmailConfig
 from django.core.mail import EmailMessage, get_connection
 from .utils import build_ticket_email  # your utility function for email content
+from .email_to_ticket import get_active_email_config
+from .email_to_ticket import build_recipients
 
 User = get_user_model()
 
 
 @admin.register(Ticket)
-class TicketAdmin(admin.ModelAdmin):
+class TicketAdmin(PurchaseOrderNotesMixin, admin.ModelAdmin):
     list_display = (
         "code",
         "title",
@@ -167,6 +268,7 @@ class TicketAdmin(admin.ModelAdmin):
         "updated_by",
         "resolved_at",
         "closed_at",
+        "purchase_order_notes",
     )
 
     fieldsets = (
@@ -197,9 +299,17 @@ class TicketAdmin(admin.ModelAdmin):
                 )
             },
         ),
+        (
+            "Purchase Order Notes",
+            {
+                "fields": (
+                    "purchase_order_notes",
+                )
+            },
+        ),
     )
 
-    inlines = [TicketCommentInline]
+    inlines = [TicketCommentInline, TicketAttachmentInline, PurchaseOrderInline]
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -217,52 +327,51 @@ class TicketAdmin(admin.ModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def save_model(self, request, obj, form, change):
-        is_new = not obj.pk
+        from django.contrib import messages
 
-        if is_new:
+        is_new = not change
+
+        old_status = None
+        if change:
+            old_status = Ticket.objects.get(pk=obj.pk).status
+
+        if not obj.created_by_id:
             obj.created_by = request.user
-
-        obj.updated_by = request.user
-
-        if obj.status == "resolved" and not obj.resolved_at:
-            obj.resolved_at = timezone.now()
-
-        if obj.status == "closed" and not obj.closed_at:
-            obj.closed_at = timezone.now()
 
         super().save_model(request, obj, form, change)
 
-        # --- Send email ---
-        email_config = EmailConfig.objects.filter(is_active=True).first()
-        if not email_config:
-            self.message_user(request, "No active Email Configuration found, email not sent.", level=messages.WARNING)
+        status_changed = old_status and old_status != obj.status
+
+        if not is_new and not status_changed:
             return
 
-        # Build recipient list: ticket creator + department users
-        recipients = []
-        if obj.created_by and obj.created_by.email:
-            recipients.append((obj.created_by.email, obj.created_by.get_full_name() or obj.created_by.username))
-        if obj.department:
-            for user in obj.department.user_set.exclude(email=""):
-                recipients.append((user.email, user.get_full_name() or user.username))
-        # Remove duplicates by email
-        seen = set()
-        recipients_unique = []
-        for email, name in recipients:
-            if email not in seen:
-                recipients_unique.append((email, name))
-                seen.add(email)
+    # -----------------------------
+    # ADD THIS (MISSING PARTS)
+    # -----------------------------
+        email_config = get_active_email_config()
+
+        if not email_config:
+            self.message_user(request, "No active email config", messages.ERROR)
+            return
+
+        recipients_unique = build_recipients(obj)
 
         if not recipients_unique:
             return
 
-        # Determine event type
-        event_type = "created" if is_new else obj.status.lower()  # "resolved" or "closed" or "open"
+        event_type = "created" if is_new else obj.status.lower()
 
+    # -----------------------------
+    # YOUR LOOP GOES HERE (UNCHANGED)
+    # -----------------------------
         for email_address, name in recipients_unique:
             try:
-                subject, body_html = build_ticket_email(obj, recipient_name=name, event=event_type)
-
+                subject, body_html = build_ticket_email(
+                    obj,
+                    recipient_name=name,
+                    event=event_type
+                )
+    
                 connection = get_connection(
                     backend='django.core.mail.backends.smtp.EmailBackend',
                     host=email_config.host,
@@ -273,15 +382,19 @@ class TicketAdmin(admin.ModelAdmin):
                     use_ssl=email_config.use_ssl,
                 )
 
-                email = EmailMessage(
+                email_msg = EmailMessage(
                     subject=subject,
                     body=body_html,
                     from_email=email_config.default_from_email,
                     to=[email_address],
                     connection=connection,
                 )
-                email.content_subtype = "html"
-                email.send(fail_silently=False)
+
+                email_msg.content_subtype = "html"
+                email_msg.extra_headers = get_outlook_importance(obj)
+
+                email_msg.send(fail_silently=False)
+
             except Exception as e:
                 self.message_user(
                     request,
@@ -294,13 +407,84 @@ class TicketAdmin(admin.ModelAdmin):
             f"Ticket '{obj.code}' notification emails sent successfully.",
             level=messages.SUCCESS
         )
+       
+        from django.utils import timezone
+        from .models import TicketOverdue
+
+        if obj.is_overdue():
+            overdue_obj, _ = TicketOverdue.objects.get_or_create(ticket=obj)
+
+            if not overdue_obj.last_notified_at or (
+                timezone.now() - overdue_obj.last_notified_at
+            ).days >= 1:
+
+                for email_address, name in recipients_unique:
+                    try:
+                        subject, body_html = build_ticket_email(
+                            obj,
+                            recipient_name=name,
+                            event="overdue"
+                        )
+
+                        connection = get_connection(
+                            backend='django.core.mail.backends.smtp.EmailBackend',
+                            host=email_config.host,
+                            port=email_config.port,
+                            username=email_config.username,
+                            password=email_config.password,
+                            use_tls=email_config.use_tls,
+                            use_ssl=email_config.use_ssl,
+                        )
+
+                        email_msg = EmailMessage(
+                           subject=subject,
+                            body=body_html,
+                            from_email=email_config.default_from_email,
+                            to=[email_address],
+                            connection=connection,
+                        )
+    
+                        email_msg.content_subtype = "html"
+                        email_msg.extra_headers = get_outlook_importance(obj)
+    
+                        email_msg.send(fail_silently=False)
+
+                    except Exception as e:
+                        self.message_user(
+                            request,
+                            f"Overdue email failed to {email_address}: {str(e)}",
+                            level=messages.ERROR
+                        )
+
+                overdue_obj.mark_notified()
         
+                self.message_user(
+                    request,
+                    f"Overdue reminder sent for ticket '{obj.code}'.",
+                    level=messages.WARNING
+                )
 # admin.py
 from django.contrib import admin, messages
 from django.urls import path
 from django.shortcuts import render, redirect
 from django.core.mail import EmailMessage, get_connection
 from .models import EmailConfig
+
+from django.contrib import admin, messages
+from django.urls import path, reverse
+from django.shortcuts import redirect
+from django.core.mail import EmailMessage, get_connection
+from django import forms
+from .models import EmailConfig
+
+
+from django.contrib import admin, messages
+from django.urls import path, reverse
+from django.shortcuts import redirect, render
+from django.core.mail import EmailMessage, get_connection
+from django import forms
+from .models import EmailConfig
+
 
 @admin.register(EmailConfig)
 class EmailConfigAdmin(admin.ModelAdmin):
@@ -309,6 +493,20 @@ class EmailConfigAdmin(admin.ModelAdmin):
     search_fields = ('name', 'host')
     change_form_template = "admin/it/emailconfig/change_form.html"
 
+    # Custom form inside admin to make password optional
+    class EmailConfigAdminForm(forms.ModelForm):
+        class Meta:
+            model = EmailConfig
+            fields = "__all__"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.fields['password'].required = False
+            self.fields['password'].widget.attrs['placeholder'] = 'Optional if no auth'
+
+    form = EmailConfigAdminForm
+
+    # Add custom URL for SMTP testing
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
@@ -320,21 +518,30 @@ class EmailConfigAdmin(admin.ModelAdmin):
         ]
         return custom_urls + urls
 
+    # SMTP test view
     def test_smtp_view(self, request, config_id):
         config = EmailConfig.objects.get(pk=config_id)
 
         if request.method == "POST":
             test_email = request.POST.get("test_email")
+            result = {"success": False, "message": ""}
+
             try:
-                connection = get_connection(
-                    backend='django.core.mail.backends.smtp.EmailBackend',
-                    host=config.host,
-                    port=config.port,
-                    username=config.username,
-                    password=config.password,
-                    use_tls=config.use_tls,
-                    use_ssl=config.use_ssl,
-                )
+                connection_params = {
+                    "backend": 'django.core.mail.backends.smtp.EmailBackend',
+                    "host": config.host,
+                    "port": config.port,
+                    "use_tls": config.use_tls,
+                    "use_ssl": config.use_ssl,
+                }
+
+                # Include username/password only if provided
+                if config.username and config.password:
+                    connection_params["username"] = config.username
+                    connection_params["password"] = config.password
+
+                connection = get_connection(**connection_params)
+
                 email = EmailMessage(
                     subject="SMTP Configuration Test",
                     body="This is a test email from Ticket System SMTP configuration.",
@@ -342,25 +549,40 @@ class EmailConfigAdmin(admin.ModelAdmin):
                     to=[test_email],
                     connection=connection,
                 )
-                email.send(fail_silently=False)
-                self.message_user(
-                    request,
-                    f"Test email sent successfully to {test_email}",
-                    level=messages.SUCCESS,
-                )
-            except Exception as e:
-                self.message_user(
-                    request,
-                    f"SMTP Test Failed: {str(e)}",
-                    level=messages.ERROR,
-                )
-            return redirect(f"../../{config_id}/change/")
+                email.extra_headers = {
+                    "Importance": "High",
+                    "X-Priority": "1",
+                    "X-MSMail-Priority": "High",
+                }
 
-        context = {
-            "config": config,
-        }
+                email.send(fail_silently=False)
+                result["success"] = True
+                result["message"] = f"Test email sent successfully to {test_email}"
+                self.message_user(request, result["message"], level=messages.SUCCESS)
+            except Exception as e:
+                result["message"] = f"SMTP Test Failed: {str(e)}"
+                self.message_user(request, result["message"], level=messages.ERROR)
+
+            # Render a simple result page
+            return render(
+                request,
+                "admin/it/emailconfig/test_smtp_result.html",
+                {"config": config, "result": result},
+            )
+
+        context = {"config": config}
         return render(request, "admin/it/emailconfig/test_smtp.html", context)
-        
+
+    # Add Test SMTP button in change view
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        obj = self.get_object(request, object_id)
+        if obj:
+            extra_context = extra_context or {}
+            extra_context['test_smtp_url'] = reverse(
+                'admin:it_emailconfig_test_smtp', args=[obj.pk]
+            )
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
 from django.contrib import admin
 from django.db.models import Count
 from django.utils import timezone
@@ -368,6 +590,9 @@ from datetime import timedelta
 from .models import TicketReport, Ticket
 from django.core.serializers.json import DjangoJSONEncoder
 import json
+
+from django.utils import timezone
+from datetime import timedelta
 
 from django.contrib import admin
 from django.db.models import Count
@@ -406,25 +631,51 @@ class TicketReportAdmin(admin.ModelAdmin):
         if request.user.is_superuser:
             tickets = Ticket.objects.all()
         else:
-            tickets = Ticket.objects.filter(department__in=request.user.groups.all())
+            tickets = Ticket.objects.filter(
+                department__in=request.user.groups.all()
+            )
 
-        # STATUS & PRIORITY
-        status_labels = ["Open", "In Progress", "Resolved", "Closed"]
-        status_counts = [tickets.filter(status=s).count() for s in status_labels]
+        # ✅ STATUS (FIXED)
+        STATUS_MAP = {
+            "Open": "open",
+            "In Progress": "in_progress",
+            "Resolved": "resolved",
+            "Closed": "closed",
+        }
 
+        status_labels = list(STATUS_MAP.keys())
+        status_counts = [
+            tickets.filter(status=STATUS_MAP[label]).count()
+            for label in status_labels
+        ]
+
+        # PRIORITY
         priority_labels = ["High", "Medium", "Low"]
-        priority_counts = [tickets.filter(priority=p).count() for p in priority_labels]
+        priority_counts = [
+            tickets.filter(priority=p).count()
+            for p in priority_labels
+        ]
 
         # TREND (last 8 weeks)
         today = timezone.now()
-        weeks, week_counts = [], []
+        
+        start_of_current_week = today - timedelta(days=today.isoweekday() - 1)
+        
+        weeks, week_counts = [],[]
+
         for i in range(8):
-            start = today - timedelta(weeks=i+1)
-            end = today - timedelta(weeks=i)
-            count = tickets.filter(created_at__range=(start, end)).count()
+            start = today - timedelta(weeks=i + 1)
+            end = start + timedelta(weeks=1)
+            count = tickets.filter(
+                created_at__range=(start, end)
+            ).count()
+            
+            
             weeks.append(start.strftime("Week %W"))
             week_counts.append(count)
-        weeks.reverse(); week_counts.reverse()
+
+        weeks.reverse()
+        week_counts.reverse()
 
         # DEPARTMENT
         dept_data = tickets.values('department__name').annotate(total=Count('id'))
@@ -434,38 +685,79 @@ class TicketReportAdmin(admin.ModelAdmin):
         # RESOLUTION TIME
         resolution_priorities = priority_labels
         avg_resolution = []
+
         for p in resolution_priorities:
-            qs = tickets.filter(priority=p, resolved_at__isnull=False)
+            qs = tickets.filter(
+                priority=p,
+                resolved_at__isnull=False
+            )
+
             if qs.exists():
-                avg = sum([(t.resolved_at - t.created_at).total_seconds()/3600 for t in qs])/qs.count()
+                avg = sum([
+                    (t.resolved_at - t.created_at).total_seconds() / 3600
+                    for t in qs
+                ]) / qs.count()
             else:
                 avg = 0
-            avg_resolution.append(round(avg,2))
 
-        # TICKETS BY CATEGORY for modal
-        tickets_by_status = {s: [{"title": t.title, "id": t.id} for t in tickets.filter(status=s)] for s in status_labels}
-        tickets_by_priority = {p: [{"title": t.title, "id": t.id} for t in tickets.filter(priority=p)] for p in priority_labels}
-        tickets_by_week = {}
-        for i, w in enumerate(weeks):
-            start = today - timedelta(weeks=8-i)
-            end = today - timedelta(weeks=7-i)
-            tickets_by_week[w] = [{"title": t.title, "id": t.id} for t in tickets.filter(created_at__range=(start,end))]
+            avg_resolution.append(round(avg, 2))
+
+        # ✅ TICKETS FOR MODALS (FIXED STATUS)
+        tickets_by_status = {
+            label: [
+                {"title": t.title, "id": t.id}
+                for t in tickets.filter(status=STATUS_MAP[label])
+            ]
+            for label in status_labels
+        }
+
+        tickets_by_priority = {
+            p: [
+                {"title": t.title, "id": t.id}
+                for t in tickets.filter(priority=p)
+            ]
+            for p in priority_labels
+        }
+
+        
+
+        tickets_by_week = {} 
+        for i, w in enumerate(weeks): 
+            start = today - timedelta(weeks=8 - i) 
+            end = today - timedelta(weeks=7 - i) 
+
+            tickets_by_week[w] = [ 
+                {"title": t.title, "id": t.id} 
+                for t in tickets.filter(
+                    created_at__range=(start, end)
+                ) 
+            ]
+
+
         tickets_by_department = {}
         for d in departments:
-            tickets_by_department[d] = [{"title": t.title, "id": t.id} for t in tickets.filter(department__name=d)]
+            tickets_by_department[d] = [
+                {"title": t.title, "id": t.id}
+                for t in tickets.filter(department__name=d)
+            ]
 
         extra_context = extra_context or {}
         extra_context.update({
-            "status_labels": json.dumps(status_labels),          # JS chart
-            "status_counts": status_counts,                       # Python list for template
+            "status_labels": json.dumps(status_labels),
+            "status_counts": status_counts,
+
             "priority_labels": json.dumps(priority_labels),
             "priority_counts": priority_counts,
+
             "weeks": json.dumps(weeks),
             "week_counts": week_counts,
+
             "departments": json.dumps(departments),
             "dept_counts": dept_counts,
+
             "resolution_priorities": json.dumps(resolution_priorities),
             "avg_resolution": avg_resolution,
+
             "tickets_by_status": json.dumps(tickets_by_status, cls=DjangoJSONEncoder),
             "tickets_by_priority": json.dumps(tickets_by_priority, cls=DjangoJSONEncoder),
             "tickets_by_week": json.dumps(tickets_by_week, cls=DjangoJSONEncoder),

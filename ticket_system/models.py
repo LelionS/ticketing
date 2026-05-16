@@ -1,7 +1,9 @@
+import os
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from django.contrib.auth.models import Group
+import uuid
 
 User = settings.AUTH_USER_MODEL
 
@@ -20,7 +22,7 @@ class Ticket(models.Model):
         ("closed", "Closed"),
     ]
 
-    code = models.CharField(max_length=20, unique=True, editable=False)
+    code = models.CharField(max_length=30, unique=True, editable=False)
     title = models.CharField(max_length=255)
     description = models.TextField()
 
@@ -64,16 +66,15 @@ class Ticket(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
+        # Generate unique ticket code using date + short UUID
         if not self.code:
             today_str = timezone.now().strftime("%Y%m%d")
-            count_today = (
-                Ticket.objects.filter(created_at__date=timezone.now().date()).count() + 1
-            )
-            self.code = f"T{today_str}-{count_today:03d}"
+            unique_suffix = uuid.uuid4().hex[:6].upper()
+            self.code = f"T{today_str}-{unique_suffix}"
 
+        # Set timestamps for resolved/closed
         if self.status == "resolved" and not self.resolved_at:
             self.resolved_at = timezone.now()
-
         if self.status == "closed" and not self.closed_at:
             self.closed_at = timezone.now()
 
@@ -95,9 +96,30 @@ class Ticket(models.Model):
             and self.status not in ["resolved", "closed"]
             and timezone.now() > self.expected_resolution_date
         )
+    def overdue_days(self):
+        if not self.is_overdue():
+            return 0
+        return (timezone.now() - self.expected_resolution_date).days
 
     def __str__(self):
         return f"{self.code} - {self.title}"
+
+class TicketAttachment(models.Model):
+    ticket = models.ForeignKey(
+        "Ticket",
+        on_delete=models.CASCADE,
+        related_name="attachments"
+    )
+    file = models.FileField(upload_to="ticket_attachments/")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def filename(self):
+        return os.path.basename(self.file.name)
+
+    def __str__(self):
+        return f"{self.ticket.code} - {self.filename()}"
+
+
 class TicketComment(models.Model):
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="comments")
     sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name="ticket_comments")
@@ -164,3 +186,46 @@ class DepartmentTickets(Ticket):
         proxy = True
         verbose_name = "Department Ticket"
         verbose_name_plural = "Department Tickets"
+
+class EmailIngestLog(models.Model):
+    status = models.CharField(max_length=20)
+    payload = models.TextField(null=True, blank=True)
+    error = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+class TicketOverdue(models.Model):
+    ticket = models.OneToOneField(
+        Ticket,
+        on_delete=models.CASCADE,
+        related_name="overdue"
+    )
+
+    first_detected_at = models.DateTimeField(null=True, blank=True)
+    last_notified_at = models.DateTimeField(null=True, blank=True)
+
+    notification_count = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def is_overdue(self):
+        return self.ticket.is_overdue()
+
+    def mark_notified(self):
+        now = timezone.now()
+
+        if not self.first_detected_at:
+            self.first_detected_at = now
+
+        self.last_notified_at = now
+        self.notification_count += 1
+
+        self.save(update_fields=[
+            "first_detected_at",
+            "last_notified_at",
+            "notification_count"
+        ])
+
+    def __str__(self):
+        return f"Overdue: {self.ticket.code}"
+
